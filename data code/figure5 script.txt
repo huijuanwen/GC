@@ -1,0 +1,164 @@
+BiocManager::install("maftools")
+
+
+library(maftools)       
+
+
+risk=read.table("risk.all.txt", header=T, sep="\t", check.names=F)
+outTab=risk[,c(1, ncol(risk))]
+colnames(outTab)=c("Tumor_Sample_Barcode", "Risk")
+write.table(outTab, file="ann.txt", sep="\t", quote=F, row.names=F)
+
+
+geneNum=20    
+geneMut=read.table("geneMut.txt", header=T, sep="\t", check.names=F, row.names=1)
+gene=row.names(geneMut)[1:geneNum]
+
+ann_colors=list()
+col=c("blue", "red")
+names(col)=c("low", "high")
+ann_colors[["Risk"]]=col
+
+pdf(file="figure 5A.pdf", width=6, height=6)
+maf=read.maf(maf="low.maf", clinicalData="ann.txt")
+oncoplot(maf=maf, clinicalFeatures="Risk", genes=gene, annotationColor=ann_colors, keepGeneOrder=T)
+dev.off()
+
+pdf(file="figure 5B.pdf", width=6, height=6)
+maf=read.maf(maf="high.maf", clinicalData="ann.txt")
+oncoplot(maf=maf, clinicalFeatures="Risk", genes=gene, annotationColor=ann_colors, keepGeneOrder=T)
+dev.off()
+
+
+
+
+library(limma)
+library(ggpubr)
+
+tmb=read.table("TMB.txt", header=T, sep="\t", check.names=F, row.names=1)
+
+risk=read.table("risk_tcga.txt", header=T, sep="\t", check.names=F, row.names=1)
+
+sameSample=intersect(row.names(tmb), row.names(risk))
+tmb=tmb[sameSample,,drop=F]
+risk=risk[sameSample,,drop=F]
+data=cbind(tmb, risk)
+data$TMB=log2(data$TMB+1)
+
+data$risk=ifelse(data$risk=="high", "High-risk", "Low-risk")
+group=levels(factor(data$risk))
+data$risk=factor(data$risk, levels=c("Low-risk", "High-risk"))
+comp=combn(group,2)
+my_comparisons=list()
+for(i in 1:ncol(comp)){my_comparisons[[i]]<-comp[,i]}
+
+boxplot=ggviolin(data, x="risk", y="TMB", fill="risk",
+                 xlab="",
+                 ylab="Tumor tmbation burden (log2)",
+                 legend.title="",
+                 palette = c("#0066FF","#FF0000"),
+                 add = "boxplot", add.params = list(fill="white"))+ 
+  stat_compare_means(comparisons = my_comparisons)
+
+pdf(file="figure 5C.pdf", width=5, height=4.5)
+print(boxplot)
+dev.off()
+
+
+
+
+
+
+riskFile="risk.all.txt"       
+RNAssFile="StemnessScores_RNAexp_20170127.2.tsv"         
+
+risk=read.table(riskFile, header=T, sep="\t", check.names=F, row.names=1)
+
+RNAss=read.table(RNAssFile, header=T, sep="\t",check.names=F, row.names=1)
+RNAss=t(RNAss[1,,drop=F])
+rownames(RNAss)=gsub("(.*?)\\-(.*?)\\-(.*?)\\-.*", "\\1\\-\\2\\-\\3", rownames(RNAss))
+RNAss=avereps(RNAss)
+
+sameSample=intersect(row.names(risk), row.names(RNAss))
+risk=risk[sameSample,"riskScore",drop=F]
+RNAss=RNAss[sameSample,,drop=F]
+data=cbind(RNAss, risk)
+
+xlab="riskScore"
+ylab="RNAss"
+outFile="figure 5D.pdf"
+x=as.numeric(data[,xlab])
+x[x>quantile(x,0.99)]=quantile(x,0.99)
+y=as.numeric(data[,ylab])
+df1=as.data.frame(cbind(x,y))
+p1=ggplot(df1, aes(x, y)) + 
+  xlab("Risk score") + ylab(ylab)+ ylim(0,0.7)+
+  geom_point() + geom_smooth(method="lm",formula = y ~ x) + theme_bw()+
+  stat_cor(method = 'spearman', aes(x =x, y =y))
+p2=ggMarginal(p1, type="density", xparams=list(fill = "orange"), yparams=list(fill = "blue"))
+
+pdf(file=outFile, width=5.2, height=5)
+print(p2)
+dev.off()
+
+
+
+
+
+
+
+
+library(plyr)
+library(ggplot2)
+library(ggpubr)
+riskFile="risk.all.txt"   
+cliFile="MSI.txt"         
+
+risk=read.table(riskFile, header=T, sep="\t", check.names=F, row.names=1)
+cli=read.table(cliFile, header=T, sep="\t", check.names=F, row.names=1)
+sameSample=intersect(row.names(risk), row.names(cli))
+rt=cbind(risk[sameSample,,drop=F], cli[sameSample,,drop=F])
+rt$MSI=factor(rt$MSI, levels=c("MSS", "MSI-L", "MSI-H"))
+rt$risk=factor(rt$risk, levels=c("low", "high"))
+bioCol=c("#0066FF","#FF0000","#FF9900","#6E568C","#7CC767","#223D6C","#D20A13","#FFD121","#088247","#11AA4D")
+bioCol=bioCol[1:length(unique(rt[,"MSI"]))]
+
+
+rt1=rt[,c("MSI", "risk")]
+df=as.data.frame(table(rt1))
+
+df=ddply(df, .(risk), transform, percent = Freq/sum(Freq) * 100)
+
+df=ddply(df, .(risk), transform, pos = (cumsum(Freq) - 0.5 * Freq))
+df$label=paste0(sprintf("%.0f", df$percent), "%")
+
+p=ggplot(df, aes(x = factor(risk), y = percent, fill = MSI)) +
+  geom_bar(position = position_stack(), stat = "identity", width = .7) +
+  scale_fill_manual(values=bioCol)+
+  xlab("riskScore")+ ylab("Percent weight")+  guides(fill=guide_legend(title="MSI"))+
+  geom_text(aes(label = label), position = position_stack(vjust = 0.5), size = 3) +
+  #coord_flip()+
+  theme_bw()
+pdf(file="figure 5E.pdf", width=4, height=5)
+print(p)
+dev.off()
+
+
+rt2=rt[,c("MSI", "riskScore")]
+type=levels(factor(rt2[,"MSI"]))
+comp=combn(type, 2)
+my_comparisons=list()
+for(i in 1:ncol(comp)){my_comparisons[[i]]<-comp[,i]}
+
+boxplot=ggboxplot(rt2, x="MSI", y="riskScore", fill="MSI",
+                  xlab="",
+                  ylab="Risk score",
+                  legend.title="MSI",
+                  palette=bioCol
+)+ 
+  stat_compare_means(comparisons=my_comparisons)
+pdf(file="figure 5F.pdf",width=4,height=4.5)
+print(boxplot)
+dev.off()
+
+

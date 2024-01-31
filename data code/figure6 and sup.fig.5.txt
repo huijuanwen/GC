@@ -1,0 +1,187 @@
+
+library(devtools)
+library(harmony)
+library(Seurat)
+library(dplyr)
+library(tidyverse)
+library(patchwork)
+library(devtools)
+library(harmony)
+
+
+
+dir_name <- list.files()
+names(dir_name) = c("Li1","Li2","LN1","LN2","NT1","O1","P1","PT1","PT2","PT3")  
+scRNAlist <- list()
+for(i in 1:length(dir_name)){
+  counts <- Read10X(data.dir = dir_name[i])
+  scRNAlist[[i]] <- CreateSeuratObject(counts, min.cells = 3, min.features =300)
+}
+for(i in 1:length(scRNAlist)){
+  sc <- scRNAlist[[i]]
+  sc[["mt_percent"]] <- PercentageFeatureSet(sc, pattern = "^MT-")
+  HB_genes <- c("HBA1","HBA2","HBB","HBD","HBE1","HBG1","HBG2","HBM","HBQ1","HBZ")
+  HB_m <- match(HB_genes, rownames(sc@assays$RNA))
+  HB_genes <- rownames(sc@assays$RNA)[HB_m] 
+  HB_genes <- HB_genes[!is.na(HB_genes)] 
+  sc[["HB_percent"]] <- PercentageFeatureSet(sc, features=HB_genes) 
+  scRNAlist[[i]] <- sc
+  rm(sc)
+}
+
+scRNAlist <- lapply(X = scRNAlist, FUN = function(x){
+  x <- subset(x, 
+              subset = nFeature_RNA > 300 & nFeature_RNA < 7000 & 
+                mt_percent < 20 & 
+                HB_percent < 5 & 
+                nCount_RNA < quantile(nCount_RNA,0.97) & 
+                nCount_RNA > 1000)})
+
+
+scRNAlist <- merge(scRNAlist[[1]],y=scRNAlist[ -1 ])
+
+
+scRNAlist <- NormalizeData(scRNAlist) %>% 
+  FindVariableFeatures(selection.method = "vst",nfeatures = 3000) %>% 
+  ScaleData() %>% 
+  RunPCA(npcs = 30, verbose = T)
+
+scRNAlist
+
+scRNA_harmony <- RunHarmony(scRNAlist, group.by.vars = "orig.ident")
+View(scRNA_harmony)
+View(scRNAlist)
+table(scRNAlist@meta.data[["orig.ident"]])
+scRNA_harmony <- FindNeighbors(scRNA_harmony, reduction = "harmony", dims = 1:15) %>% FindClusters(resolution = 1)
+scRNA_harmony <- RunTSNE(scRNA_harmony, reduction = "harmony", dims = 1:15)
+scRNA_harmony <- RunUMAP(scRNA_harmony, reduction = "harmony", dims = 1:15)
+
+
+umap_integrated1 <- DimPlot(scRNA_harmony, reduction = "umap", group.by = "orig.ident")
+umap_integrated2 <- DimPlot(scRNA_harmony, reduction = "umap", label = TRUE)
+tsne_integrated1 <- DimPlot(scRNA_harmony, reduction = "tsne", group.by = "orig.ident") 
+tsne_integrated2 <- DimPlot(scRNA_harmony, reduction = "tsne", label = TRUE)
+umap_tsne_integrated <- CombinePlots(list(tsne_integrated1,tsne_integrated2,umap_integrated1,umap_integrated2),ncol=2)
+
+umap_tsne_integrated
+
+ggsave("sup.figure5.pdf",umap_tsne_integrated,wi=25,he=15)
+
+save(scRNA_harmony,scRNAlist,file = "scdata2.Rdata")
+
+
+markers <- FindAllMarkers(object = scRNA_harmony, test.use="wilcox" ,
+                          only.pos = TRUE,
+                          logfc.threshold = 0.25)   
+all.markers =markers %>% dplyr::select(gene, everything()) %>% subset(p_val<0.05)
+top10 = all.markers %>% group_by(cluster) %>% top_n(n = 10, wt = avg_log2FC)
+
+levels(Idents(scRNA_harmony))
+DimPlot(scRNA_harmony, reduction = 'umap', 
+        label = TRUE, pt.size = 0.5) + NoLegend()
+
+scRNA_harmony <- RenameIdents(scRNA_harmony, "16" = "CAFs","18"="CAFs")
+scRNA_harmony <- RenameIdents(scRNA_harmony, '1'= 'non-CAFs','2'= 'non-CAFs','3'= 'non-CAFs','4'= 'non-CAFs','5'= 'non-CAFs','6'= 'non-CAFs','7'= 'non-CAFs','8'= 'non-CAFs','9'= 'non-CAFs','10'= 'non-CAFs','11'= 'non-CAFs','12'= 'non-CAFs','13'= 'non-CAFs','14'= 'non-CAFs','15'= 'non-CAFs','17'= 'non-CAFs','19'= 'non-CAFs','20'= 'non-CAFs','21'= 'non-CAFs','0'= 'non-CAFs')
+DimPlot(scRNA_harmony)
+
+
+VlnPlot(scRNA_harmony, features = c("SGCE", "APOD",'PPP1R14A','AOX1','PTGIS'))
+DimPlot(scRNA_harmony, features = c("SGCE", "APOD",'PPP1R14A','AOX1','PTGIS'))
+DimPlot(scRNA_harmony, reduction = "umap", label = TRUE)
+DotPlot(scRNA_harmony, features = c("SGCE", "APOD",'PPP1R14A','AOX1','PTGIS','ACTA2','FAP','PDGFRA','PDGFRB','PDPN','THY1','COL1A1'))
+
+
+
+
+
+
+
+table(scRNA_harmony@meta.data$seurat_clusters)
+genes_to_check = c("SGCE", "APOD",'PPP1R14A','ACTA2','FAP','PDGFRA','PDGFRB','PDPN','THY1','COL1A1')
+DotPlot(scRNA_harmony, group.by = 'seurat_clusters',
+        features = unique(genes_to_check)) + RotatedAxis()
+p1=DimPlot(scRNA_harmony, reduction = 'umap', group.by = 'seurat_clusters',
+           label = TRUE, pt.size = 0.5) + NoLegend()
+p2=DotPlot(scRNA_harmony, 
+           features = unique(genes_to_check)) + RotatedAxis()
+library(patchwork)
+p1+p2
+
+p2
+ggsave("figure6C and 6D.pdf",p2,wi=25,he=15)
+
+CAF_sce1 = scRNA_harmony[,scRNA_harmony@meta.data$seurat_clusters %in% c(16,18)]
+p3=DotPlot(CAF_sce1,features = genes_to_check)
+View(CAF_sce1)
+
+
+
+genes_to_check1 = c("PTPRC","EPCAM",'PECAM1','MME',"CD3G","CD3E", "CD79A")
+p <- DotPlot(scRNA_harmony, features = genes_to_check1,
+             assay='RNA' ) 
+p
+
+
+
+
+
+
+
+
+
+
+
+CAF_sce1
+CAF_sce1 <- NormalizeData(CAF_sce1, normalization.method =  "LogNormalize", 
+                     scale.factor = 10000)
+GetAssay(CAF_sce1,assay = "RNA")
+CAF_sce1 <- FindVariableFeatures(CAF_sce1, 
+                            selection.method = "vst", nfeatures = 2000) 
+CAF_sce1 <- ScaleData(CAF_sce1) 
+CAF_sce1 <- RunPCA(object = CAF_sce1, pc.genes = VariableFeatures(CAF_sce1)) 
+res.used <- 0.7
+CAF_sce1 <- FindClusters(object = CAF_sce1, verbose = T)
+set.seed(123)
+sce <- RunTSNE(object = CAF_sce1, dims = 1:15, do.fast = TRUE)
+DimPlot(CAF_sce1,reduction = "tsne",label=T)
+DimPlot(CAF_sce1,reduction = "tsne",label=T, group.by = "patient_id")
+table(CAF_sce1@meta.data$seurat_clusters)
+
+
+
+
+sce_for_SingleR <- GetAssayData(CAF_sce1, slot="data")
+sce_for_SingleR
+library(SingleR)
+hpca.se <- HumanPrimaryCellAtlasData()
+hpca.se
+
+clusters=sce@meta.data$seurat_clusters
+pred.hesc <- SingleR(test = sce_for_SingleR, ref = hpca.se, labels = hpca.se$label.main,
+                     method = "cluster", clusters = clusters, 
+                     assay.type.test = "logcounts", assay.type.ref = "logcounts")
+table(pred.hesc$labels)
+
+
+
+
+
+CAF_sce1 <- FindNeighbors(CAF_sce1, reduction = "harmony", dims = 1:15) %>% FindClusters(resolution = 1)
+
+CAF_sce1 <- RunTSNE(CAF_sce1, reduction = "harmony", dims = 1:15)
+CAF_sce1 <- RunUMAP(CAF_sce1, reduction = "harmony", dims = 1:15)
+CAF_sce1_integrated1 <- DimPlot(CAF_sce1, reduction = "tsne") 
+CAF_sce1_integrated1
+genes_to_check = c("SGCE", "APOD",'PPP1R14A')
+DotPlot(CAF_sce1, group.by = 'seurat_clusters',
+        features = unique(genes_to_check)) + RotatedAxis()
+p3=DimPlot(CAF_sce1, reduction = 'umap', group.by = 'seurat_clusters',
+           label = TRUE, pt.size = 0.5) + NoLegend()
+p4=DotPlot(CAF_sce1, group.by = 'seurat_clusters',
+           features = unique(genes_to_check)) + RotatedAxis()
+library(patchwork)
+p3+p4
+
+
+ggsave("figure6A and 6B.pdf",p3+p4,wi=25,he=15)
+

@@ -1,0 +1,84 @@
+#BiocManager::install("ConsensusClusterPlus")
+
+
+library(ConsensusClusterPlus)    
+expFile="NAD_GeneExp.txt"         
+workDir="\"     
+setwd(workDir)       
+
+data=read.table(expFile, header=T, sep="\t", check.names=F, row.names=1)
+data=as.matrix(data)
+
+maxK=9
+results=ConsensusClusterPlus(data,
+                             maxK=maxK,
+                             reps=50,
+                             pItem=0.8,
+                             pFeature=1,
+                             title=workDir,
+                             clusterAlg="km",
+                             distance="euclidean",
+                             seed=123456,
+                             plot="png")
+
+
+clusterNum=3       
+cluster=results[[clusterNum]][["consensusClass"]]
+cluster=as.data.frame(cluster)
+colnames(cluster)=c("PRGcluster")
+letter=c("A","B","C","D","E","F","G")
+uniqClu=levels(factor(cluster$PRGcluster))
+cluster$PRGcluster=letter[match(cluster$PRGcluster, uniqClu)]
+clusterOut=rbind(ID=colnames(cluster), cluster)
+write.table(clusterOut, file="NAD_cluster.txt", sep="\t", quote=F, col.names=F)
+
+
+
+library(survival)
+library(survminer)
+
+clusterFile="NAD_cluster.txt"    
+cliFile="time.txt"             
+
+cluster=read.table(clusterFile, header=T, sep="\t", check.names=F, row.names=1)
+rownames(cluster)=gsub("(.*?)\\_(.*?)", "\\2", rownames(cluster))
+cli=read.table(cliFile, header=T, sep="\t", check.names=F, row.names=1)
+colnames(cli)=c("futime", "fustat")
+cli$futime=cli$futime/365
+
+sameSample=intersect(row.names(cluster), row.names(cli))
+rt=cbind(cli[sameSample,,drop=F], cluster[sameSample,,drop=F])
+
+length=length(levels(factor(rt$NADcluster)))
+diff=survdiff(Surv(futime, fustat) ~ NADcluster, data = rt)
+pValue=1-pchisq(diff$chisq, df=length-1)
+if(pValue<0.001){
+  pValue="p<0.001"
+}else{
+  pValue=paste0("p=",sprintf("%.03f",pValue))
+}
+fit <- survfit(Surv(futime, fustat) ~ NADcluster, data = rt)
+print(surv_median(fit))
+
+bioCol=c("#0066FF","#FF9900","#FF0000","#6E568C","#7CC767","#223D6C","#D20A13","#FFD121","#088247","#11AA4D")
+bioCol=bioCol[1:length]
+surPlot=ggsurvplot(fit, 
+                   data=rt,
+                   conf.int=F,
+                   pval=pValue,
+                   pval.size=6,
+                   legend.title="NADcluster",
+                   legend.labs=levels(factor(rt[,"NADcluster"])),
+                   legend = c(0.8, 0.8),
+                   font.legend=10,
+                   xlab="Time(years)",
+                   break.time.by = 1,
+                   palette = bioCol,
+                   surv.median.line = "hv",
+                   risk.table=T,
+                   cumevents=F,
+                   risk.table.height=.25)
+pdf(file="figure 1C.pdf",onefile = FALSE,width=7,height=5.5)
+print(surPlot)
+dev.off()
+
